@@ -536,6 +536,11 @@ async def test_bedrock_native_output_stream(
     )
 
 
+class Decision(BaseModel):
+    confidence: float = Field(ge=0.0, le=1.0)
+    title: str = Field(min_length=1)
+
+
 def test_bedrock_native_output_profile_default_transforms_schema(
     allow_model_requests: None,
     bedrock_provider: BedrockProvider,
@@ -556,10 +561,6 @@ def test_bedrock_native_output_profile_default_transforms_schema(
         provider=bedrock_provider,
         profile={'default_structured_output_mode': 'native'},
     )
-
-    class Decision(BaseModel):
-        confidence: float = Field(ge=0.0, le=1.0)
-        title: str = Field(min_length=1)
 
     agent = Agent(model, output_type=Decision)
 
@@ -604,11 +605,36 @@ async def test_bedrock_native_output_profile_default(
         profile={'default_structured_output_mode': 'native'},
     )
 
-    class Decision(BaseModel):
-        confidence: float = Field(ge=0.0, le=1.0)
-        title: str = Field(min_length=1)
-
     agent = Agent(model, output_type=Decision)
     result = await agent.run('Should we ship the feature? Give a confidence (0-1) and a short title.')
 
-    assert isinstance(result.output, Decision)
+    assert result.output == snapshot(Decision(confidence=0.5, title='Insufficient information to recommend shipping'))
+    assert result.all_messages() == snapshot(
+        [
+            ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        content='Should we ship the feature? Give a confidence (0-1) and a short title.',
+                        timestamp=IsDatetime(),
+                    )
+                ],
+                timestamp=IsDatetime(),
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+            ModelResponse(
+                parts=[
+                    TextPart(content='{"confidence": 0.5, "title": "Insufficient information to recommend shipping"}')
+                ],
+                usage=RequestUsage(input_tokens=215, output_tokens=22),
+                model_name='us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+                timestamp=IsDatetime(),
+                provider_name='bedrock',
+                provider_url='https://bedrock-runtime.us-east-1.amazonaws.com',
+                provider_details={'finish_reason': 'end_turn'},
+                finish_reason='stop',
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+        ]
+    )
