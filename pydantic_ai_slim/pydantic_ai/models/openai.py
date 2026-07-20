@@ -3398,6 +3398,7 @@ class OpenAIStreamedResponse(StreamedResponse):
     _model_settings: OpenAIChatModelSettings | None = None
     _has_refusal: bool = field(default=False, init=False)
     _refusal_text: str = field(default='', init=False)
+    _has_finish_reason: bool = field(default=False, init=False)
 
     async def close_stream(self) -> None:
         await self._response.source.close()
@@ -3426,6 +3427,8 @@ class OpenAIStreamedResponse(StreamedResponse):
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]
+                raw_finish_reason = choice.finish_reason
+                self._has_finish_reason = self._has_finish_reason or bool(raw_finish_reason)
 
                 # When using Azure OpenAI and an async content filter is enabled, the openai SDK can return None deltas.
                 if choice.delta is None:  # pyright: ignore[reportUnnecessaryComparison]
@@ -3440,7 +3443,7 @@ class OpenAIStreamedResponse(StreamedResponse):
                     self._refusal_text += choice.delta.refusal
                     continue
 
-                if raw_finish_reason := choice.finish_reason:
+                if raw_finish_reason:
                     if not self._has_refusal:
                         self.finish_reason = self._map_finish_reason(raw_finish_reason)
 
@@ -3454,6 +3457,11 @@ class OpenAIStreamedResponse(StreamedResponse):
 
             if self._refusal_text:
                 self.provider_details = {**(self.provider_details or {}), 'refusal': self._refusal_text}
+            self._ensure_finish_reason()
+
+    def _ensure_finish_reason(self) -> None:
+        if not self._has_finish_reason and not self.cancelled:
+            raise ModelAPIError(model_name=self.model_name, message='Streamed response ended without a finish reason')
 
     def _validate_response(self) -> AsyncIterable[ChatCompletionChunk]:
         """Hook that validates incoming chunks.

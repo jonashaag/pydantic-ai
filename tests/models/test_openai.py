@@ -576,7 +576,7 @@ def text_chunk(text: str, finish_reason: FinishReason | None = None) -> chat.Cha
 
 
 async def test_stream_text(allow_model_requests: None):
-    stream = [text_chunk('hello '), text_chunk('world'), chunk([])]
+    stream = [text_chunk('hello '), text_chunk('world'), chunk([ChoiceDelta()], finish_reason='stop')]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
     agent = Agent(m)
@@ -657,6 +657,25 @@ async def test_stream_text_finish_reason(allow_model_requests: None):
             )
 
 
+async def test_stream_unknown_finish_reason_is_terminal(allow_model_requests: None):
+    final_chunk = text_chunk('hello')
+    final_chunk.choices[0] = final_chunk.choices[0].model_copy(update={'finish_reason': 'unknown'})
+    mock_client = MockOpenAI.create_mock_stream([final_chunk])
+    agent = Agent(OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client)))
+
+    async with agent.run_stream('') as result:
+        assert await result.get_output() == 'hello'
+
+    response = result.all_messages()[-1]
+    assert isinstance(response, ModelResponse)
+    assert response.provider_details == {
+        'finish_reason': 'unknown',
+        'timestamp': datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+    }
+    assert response.finish_reason is None
+    assert response.state == 'complete'
+
+
 def struc_chunk(
     tool_name: str | None, tool_arguments: str | None, finish_reason: FinishReason | None = None
 ) -> chat.ChatCompletionChunk:
@@ -690,7 +709,7 @@ async def test_stream_structured(allow_model_requests: None):
         struc_chunk(None, '{"first": "One'),
         struc_chunk(None, '", "second": "Two"'),
         struc_chunk(None, '}'),
-        chunk([]),
+        chunk([ChoiceDelta()], finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
@@ -744,7 +763,7 @@ async def test_stream_native_output(allow_model_requests: None):
         text_chunk('{"first": "One'),
         text_chunk('", "second": "Two"'),
         text_chunk('}'),
-        chunk([]),
+        chunk([ChoiceDelta()], finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
@@ -780,7 +799,7 @@ async def test_stream_tool_call_with_empty_text(allow_model_requests: None):
         struc_chunk(None, '{"first": "One'),
         struc_chunk(None, '", "second": "Two"'),
         struc_chunk(None, '}'),
-        chunk([]),
+        chunk([ChoiceDelta()], finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-oss:20b', provider=OllamaProvider(openai_client=mock_client))
@@ -811,7 +830,7 @@ async def test_stream_text_empty_think_tag_and_text_before_tool_call(allow_model
         struc_chunk(None, '{"first": "One'),
         struc_chunk(None, '", "second": "Two"'),
         struc_chunk(None, '}'),
-        chunk([]),
+        chunk([ChoiceDelta()], finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('qwen3', provider=OllamaProvider(openai_client=mock_client))
@@ -835,7 +854,7 @@ async def test_no_delta(allow_model_requests: None):
     stream = [
         chunk([]),
         text_chunk('hello '),
-        text_chunk('world'),
+        text_chunk('world', finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
@@ -849,7 +868,7 @@ async def test_no_delta(allow_model_requests: None):
 
 
 def none_delta_chunk(finish_reason: FinishReason | None = None) -> chat.ChatCompletionChunk:
-    choice = ChunkChoice(index=0, delta=ChoiceDelta())
+    choice = ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason=finish_reason)
     # When using Azure OpenAI and an async content filter is enabled, the openai SDK can return None deltas.
     choice.delta = None  # pyright: ignore[reportAttributeAccessIssue]
     return chat.ChatCompletionChunk(
@@ -864,9 +883,9 @@ def none_delta_chunk(finish_reason: FinishReason | None = None) -> chat.ChatComp
 
 async def test_none_delta(allow_model_requests: None):
     stream = [
-        none_delta_chunk(),
         text_chunk('hello '),
         text_chunk('world'),
+        none_delta_chunk(finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
@@ -884,7 +903,9 @@ async def test_none_choices(allow_model_requests: None):
     # loose constructor lets them through despite the typed-as-list field declaration.
     bad_chunk = text_chunk('')
     bad_chunk.choices = None  # pyright: ignore[reportAttributeAccessIssue]
-    mock_client = MockOpenAI.create_mock_stream([bad_chunk, text_chunk('hello '), text_chunk('world')])
+    mock_client = MockOpenAI.create_mock_stream(
+        [bad_chunk, text_chunk('hello '), text_chunk('world', finish_reason='stop')]
+    )
     agent = Agent(OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client)))
 
     async with agent.run_stream('') as result:
@@ -5471,7 +5492,9 @@ async def test_stream_with_continuous_usage_stats(allow_model_requests: None):
         ),
         chunk_with_usage([ChoiceDelta(content='world')], completion_tokens=10, prompt_tokens=10, total_tokens=20),
         chunk_with_usage([ChoiceDelta(content='!')], completion_tokens=15, prompt_tokens=10, total_tokens=25),
-        chunk_with_usage([], finish_reason='stop', completion_tokens=15, prompt_tokens=10, total_tokens=25),
+        chunk_with_usage(
+            [ChoiceDelta()], finish_reason='stop', completion_tokens=15, prompt_tokens=10, total_tokens=25
+        ),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
@@ -5530,8 +5553,7 @@ async def test_openai_chat_refusal_streaming(allow_model_requests: None):
     """Test that refusal deltas in streaming trigger ContentFilterError."""
     stream = [
         chunk([ChoiceDelta(refusal="I'm sorry, ", role='assistant')]),
-        chunk([ChoiceDelta(refusal="I can't help with that.")]),
-        chunk([ChoiceDelta()], finish_reason='stop'),
+        chunk([ChoiceDelta(refusal="I can't help with that.")], finish_reason='stop'),
     ]
     mock_client = MockOpenAI.create_mock_stream(stream)
     m = OpenAIChatModel('gpt-4o', provider=OpenAIProvider(openai_client=mock_client))
