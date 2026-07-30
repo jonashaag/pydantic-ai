@@ -26,17 +26,16 @@ def evroc_api_key() -> str:
 
 
 async def test_clean_eof_without_finish_reason(allow_model_requests: None, evroc_api_key: str):
-    """Reproduce an evroc stream that reaches clean EOF before model completion."""
+    """Reproduce clean EOF using one content chunk from a real evroc recording."""
     model = OpenAIChatModel(
         'moonshotai/Kimi-K2.6',
         provider=OpenAIProvider(base_url='https://models.think.evroc.com/v1', api_key=evroc_api_key),
     )
-    settings = OpenAIChatModelSettings(extra_headers={'X-Think-Timeout': '5'})
-    messages: list[ModelMessage] = [
-        ModelRequest.user_text_prompt(
-            'Output every integer from 1 through 100000, one per line. Do not abbreviate or stop early.'
-        )
-    ]
+    settings = OpenAIChatModelSettings(
+        extra_headers={'X-Think-Timeout': '1'},
+        extra_body={'chat_template_kwargs': {'thinking': False}},
+    )
+    messages: list[ModelMessage] = [ModelRequest.user_text_prompt('Count to 100000, one number per line.')]
 
     async with model.request_stream(messages, settings, ModelRequestParameters()) as stream:
         async for _ in stream:
@@ -45,5 +44,4 @@ async def test_clean_eof_without_finish_reason(allow_model_requests: None, evroc
     response = stream.get()
     assert response.state == 'complete'
     assert response.finish_reason is None
-    assert response.text is not None
-    assert response.text.strip().splitlines() == [str(number) for number in range(1, 215)]
+    assert response.text == ' I'
